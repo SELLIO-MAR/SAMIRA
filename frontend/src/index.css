@@ -1,0 +1,28 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  @apply bg-canvas text-ink font-sans antialiased;
+}
+
+h1, h2, h3 {
+  @apply font-serif;
+}
+
+/* Focus clavier visible, cohérent sur tous les éléments interactifs */
+:focus-visible {
+  outline: 2px solid #C08A2E;
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

@@ -1,0 +1,185 @@
+// Schéma de base de données - Plateforme de gestion des emplois du temps scolaires
+// PostgreSQL + Prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Jour de la semaine travaillé par l'établissement
+model WorkDay {
+  id        String   @id @default(cuid())
+  schoolId  String
+  school    SchoolConfig @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  dayOfWeek Int      // 0 = Lundi ... 6 = Dimanche
+  startTime String   // "08:00"
+  endTime   String   // "17:00"
+  slots     TimeSlot[]
+  breaks    Break[]
+
+  @@unique([schoolId, dayOfWeek])
+}
+
+/// Créneau horaire "occupable" d'une journée (ex: 08h-09h)
+model TimeSlot {
+  id        String   @id @default(cuid())
+  workDayId String
+  workDay   WorkDay  @relation(fields: [workDayId], references: [id], onDelete: Cascade)
+  startTime String   // "08:00"
+  endTime   String   // "09:00"
+  order     Int      // ordre dans la journée, pour affichage
+
+  sessions  Session[]
+
+  @@unique([workDayId, order])
+}
+
+/// Pause (récréation, pause déjeuner...) au sein d'une journée
+model Break {
+  id        String  @id @default(cuid())
+  workDayId String
+  workDay   WorkDay @relation(fields: [workDayId], references: [id], onDelete: Cascade)
+  label     String  // "Récréation", "Pause déjeuner"
+  startTime String
+  endTime   String
+}
+
+/// Configuration générale de l'établissement (singleton logique, mais modélisé en table pour évoluer)
+model SchoolConfig {
+  id                  String   @id @default(cuid())
+  name                String   @default("Mon établissement")
+  maxSessionsPerDay   Int      @default(8)
+  sessionDurationMin  Int      @default(60) // durée par défaut d'une séance, en minutes
+  freeHalfDays        Json     @default("[]") // ex: [{"dayOfWeek":3,"period":"afternoon"}]
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  workDays            WorkDay[]
+  levels              Level[]
+  classes             Class[]
+  teachers            Teacher[]
+  timetableRuns       TimetableRun[]
+}
+
+/// Niveau scolaire (1AC, 2AC, TC, 1BAC SM...)
+model Level {
+  id        String   @id @default(cuid())
+  schoolId  String
+  school    SchoolConfig @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  name      String   // "1AC", "TC", "1BAC SM"
+
+  classes   Class[]
+  subjects  SubjectRequirement[]
+
+  @@unique([schoolId, name])
+}
+
+/// Classe concrète (1AC-A, 1AC-B...)
+model Class {
+  id        String   @id @default(cuid())
+  schoolId  String
+  school    SchoolConfig @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  levelId   String
+  level     Level    @relation(fields: [levelId], references: [id], onDelete: Cascade)
+  name      String   // "1AC-A"
+  studentCount Int?  @default(0)
+
+  teacherAssignments TeacherAssignment[]
+  sessions  Session[]
+
+  @@unique([schoolId, name])
+}
+
+/// Matière (nom global, ex: "Mathématiques")
+model Subject {
+  id       String   @id @default(cuid())
+  name     String   @unique
+  colorHex String   @default("#1E2A44") // couleur utilisée dans les grilles d'emploi du temps
+
+  requirements SubjectRequirement[]
+  teachers     Teacher[]
+}
+
+/// Volume horaire hebdomadaire d'une matière pour un niveau donné
+model SubjectRequirement {
+  id             String   @id @default(cuid())
+  levelId        String
+  level          Level    @relation(fields: [levelId], references: [id], onDelete: Cascade)
+  subjectId      String
+  subject        Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  weeklyHours    Int      // nombre d'heures par semaine
+
+  @@unique([levelId, subjectId])
+}
+
+/// Enseignant
+model Teacher {
+  id             String   @id @default(cuid())
+  schoolId       String
+  school         SchoolConfig @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  fullName       String
+  subjectId      String
+  subject        Subject  @relation(fields: [subjectId], references: [id])
+  weeklyHours    Int      @default(0) // volume horaire souhaité/contractuel
+
+  availabilities TeacherAvailability[]
+  assignments    TeacherAssignment[]
+  sessions       Session[]
+}
+
+/// Disponibilité/indisponibilité déclarée d'un enseignant sur un créneau donné
+model TeacherAvailability {
+  id         String  @id @default(cuid())
+  teacherId  String
+  teacher    Teacher @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  dayOfWeek  Int
+  startTime  String
+  endTime    String
+  isAvailable Boolean @default(true) // false = indisponibilité explicite
+}
+
+/// Association enseignant <-> classe : "ce prof enseigne sa matière à cette classe"
+model TeacherAssignment {
+  id         String  @id @default(cuid())
+  teacherId  String
+  teacher    Teacher @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  classId    String
+  class      Class   @relation(fields: [classId], references: [id], onDelete: Cascade)
+
+  @@unique([teacherId, classId])
+}
+
+/// Une exécution du moteur de génération (permet de garder un historique / de comparer des versions)
+model TimetableRun {
+  id          String   @id @default(cuid())
+  schoolId    String
+  school      SchoolConfig @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  status      String   // "SUCCESS" | "PARTIAL" | "FAILED"
+  score       Float?   // score de qualité (heures creuses, répartition...)
+  unresolvedCount Int  @default(0)
+  createdAt   DateTime @default(now())
+
+  sessions    Session[]
+}
+
+/// Une séance placée dans l'emploi du temps : classe X, matière Y, prof Z, créneau W
+model Session {
+  id            String    @id @default(cuid())
+  runId         String
+  run           TimetableRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  classId       String
+  class         Class     @relation(fields: [classId], references: [id], onDelete: Cascade)
+  teacherId     String
+  teacher       Teacher   @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  subjectId     String
+  timeSlotId    String
+  timeSlot      TimeSlot  @relation(fields: [timeSlotId], references: [id], onDelete: Cascade)
+  dayOfWeek     Int
+
+  @@unique([runId, classId, timeSlotId, dayOfWeek])
+  @@unique([runId, teacherId, timeSlotId, dayOfWeek])
+}
