@@ -53,6 +53,7 @@ model SchoolConfig {
   id                  String   @id @default(cuid())
   name                String   @default("Mon établissement")
   maxSessionsPerDay   Int      @default(8)
+  maxSubjectHoursPerDay Int    @default(2) // ex: Maths ne peut pas dépasser 2h le même jour pour une même classe
   sessionDurationMin  Int      @default(60) // durée par défaut d'une séance, en minutes
   freeHalfDays        Json     @default("[]") // ex: [{"dayOfWeek":3,"period":"afternoon"}]
   createdAt           DateTime @default(now())
@@ -71,6 +72,10 @@ model Level {
   schoolId  String
   school    SchoolConfig @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   name      String   // "1AC", "TC", "1BAC SM"
+  /// Jours (ou demi-journées) sans cours pour ce niveau.
+  /// ex: [{"dayOfWeek":2,"period":"full"},{"dayOfWeek":4,"period":"afternoon"}]
+  /// period: "full" | "morning" | "afternoon"
+  restDays  Json     @default("[]")
 
   classes   Class[]
   subjects  SubjectRequirement[]

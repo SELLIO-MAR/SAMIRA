@@ -38,6 +38,8 @@ const workDaySchema = z.object({
 const updateSchoolSchema = z.object({
   name: z.string().min(1),
   maxSessionsPerDay: z.number().int().min(1).max(15),
+  /** Nombre maximum de séances de la même matière, pour une même classe, le même jour. */
+  maxSubjectHoursPerDay: z.number().int().min(1).max(10).default(2),
   freeHalfDays: z
     .array(z.object({ dayOfWeek: z.number(), period: z.enum(["morning", "afternoon"]) }))
     .default([]),
@@ -108,6 +110,7 @@ schoolConfigRouter.put("/", async (req, res, next) => {
       data: {
         name: data.name,
         maxSessionsPerDay: data.maxSessionsPerDay,
+        maxSubjectHoursPerDay: data.maxSubjectHoursPerDay,
         freeHalfDays: data.freeHalfDays,
       },
     });

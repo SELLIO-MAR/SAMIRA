@@ -41,7 +41,16 @@ export default function GeneratePage() {
             <li>Aucun professeur sur deux classes en même temps.</li>
             <li>Aucune classe avec deux matières en même temps.</li>
             <li>Respect du nombre maximum de séances par jour et des pauses définies.</li>
-            <li>Répartition des cours sur la semaine et réduction des heures creuses (optimisation).</li>
+            <li>
+              Une même matière ne dépasse jamais le nombre maximum d'heures par jour défini à
+              l'Étape 1 (ex : pas plus de 2h de Maths le même jour pour une classe).
+            </li>
+            <li>Aucune séance placée sur un jour ou une demi-journée de repos d'un niveau (Étape 2).</li>
+            <li>
+              Priorité forte à l'emploi du temps du professeur sans heures creuses : ses séances
+              d'une même journée sont regroupées pour qu'il n'ait pas à attendre entre deux cours.
+            </li>
+            <li>Répartition des cours sur la semaine et réduction des heures creuses côté classe (optimisation).</li>
           </ul>
         </Card>
 

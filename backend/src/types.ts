@@ -41,3 +41,12 @@ export interface GenerationResult {
   placed: PlacedSession[];
   unresolved: SchedulableUnit[];
 }
+
+export interface RestDay {
+  dayOfWeek: number;
+  period: "full" | "morning" | "afternoon";
+}
+
+/** Heure de bascule matin/après-midi utilisée pour interpréter les repos "demi-journée". */
+export const AFTERNOON_THRESHOLD = "13:00";
+

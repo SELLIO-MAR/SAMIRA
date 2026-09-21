@@ -33,9 +33,9 @@ import {
  *    placées, puis le meilleur score de qualité).
  */
 
-const MAX_RESTARTS = 8;
+const MAX_RESTARTS = 12;
 const MAX_BACKTRACK_STEPS = 60_000; // garde-fou pour éviter un temps infini
-const TIME_BUDGET_MS = 6_000;
+const TIME_BUDGET_MS = 8_000;
 
 interface InternalUnit extends SchedulableUnit {
   domain: SlotRef[]; // recalculé à chaque tentative
@@ -109,13 +109,41 @@ function shuffle<T>(arr: T[]): T[] {
  * Calcule un score de qualité pour une solution complète (plus haut = meilleur).
  * Pénalise les heures creuses et les répétitions de matière le même jour.
  */
+function countGaps(usedOrders: number[]): number {
+  if (usedOrders.length <= 1) return 0;
+  const sorted = [...usedOrders].sort((a, b) => a - b);
+  const span = sorted[sorted.length - 1] - sorted[0] + 1;
+  return span - sorted.length;
+}
+
+/**
+ * Score de qualité d'une solution complète (plus haut = meilleur / 0 = parfait).
+ *
+ * Deux sources de pénalité :
+ *  - Heures creuses côté PROFESSEUR (priorité la plus haute) : un prof doit
+ *    arriver, enchaîner toutes ses séances de la journée, puis repartir —
+ *    pas rester à attendre entre deux séances séparées par un trou.
+ *  - Heures creuses côté CLASSE, et répétition d'une même matière le même jour.
+ */
 function scoreSolution(
   placed: PlacedSession[],
   slotsByDay: Map<number, SlotRef[]>
 ): number {
   let penalty = 0;
 
-  // Regrouper par classe puis par jour
+  // --- Heures creuses côté professeur (poids le plus fort) ---------------
+  const byTeacherDay = new Map<string, PlacedSession[]>();
+  for (const s of placed) {
+    const key = `${s.teacherId}::${s.dayOfWeek}`;
+    if (!byTeacherDay.has(key)) byTeacherDay.set(key, []);
+    byTeacherDay.get(key)!.push(s);
+  }
+  for (const sessions of byTeacherDay.values()) {
+    const gaps = countGaps(sessions.map((s) => s.order));
+    penalty += gaps * 6; // un trou dans la journée d'un prof coûte cher
+  }
+
+  // --- Heures creuses côté classe + répétition de matière -----------------
   const byClassDay = new Map<string, PlacedSession[]>();
   for (const s of placed) {
     const key = `${s.classId}::${s.dayOfWeek}`;
@@ -123,17 +151,8 @@ function scoreSolution(
     byClassDay.get(key)!.push(s);
   }
 
-  for (const [key, sessions] of byClassDay) {
-    const dayOfWeek = sessions[0].dayOfWeek;
-    const daySlots = (slotsByDay.get(dayOfWeek) ?? []).map((s) => s.order);
-    const usedOrders = sessions.map((s) => s.order).sort((a, b) => a - b);
-
-    // Heures creuses : trous entre la première et la dernière séance de la classe ce jour-là
-    if (usedOrders.length > 1) {
-      const span = usedOrders[usedOrders.length - 1] - usedOrders[0] + 1;
-      const gaps = span - usedOrders.length;
-      penalty += gaps * 3;
-    }
+  for (const sessions of byClassDay.values()) {
+    penalty += countGaps(sessions.map((s) => s.order)) * 3;
 
     // Répétition de la même matière le même jour
     const subjectCounts = new Map<string, number>();
@@ -153,8 +172,19 @@ export function generateTimetable(params: {
   units: SchedulableUnit[]; // toutes les séances à placer
   teacherAvailability: Map<string, AvailabilityWindow[]>;
   maxSessionsPerDayPerClass: number;
+  /** Nombre maximum de séances de LA MÊME matière, pour UNE MÊME classe, le même jour (contrainte dure). */
+  maxSubjectHoursPerDayPerClass: number;
+  /** Créneaux interdits pour une classe donnée (jours/demi-journées de repos de son niveau). */
+  classBlockedSlots: Map<string, Set<string>>;
 }): GenerationResult {
-  const { slots, units, teacherAvailability, maxSessionsPerDayPerClass } = params;
+  const {
+    slots,
+    units,
+    teacherAvailability,
+    maxSessionsPerDayPerClass,
+    maxSubjectHoursPerDayPerClass,
+    classBlockedSlots,
+  } = params;
 
   const slotsByDay = new Map<number, SlotRef[]>();
   for (const s of slots) {
@@ -173,6 +203,8 @@ export function generateTimetable(params: {
       units,
       teacherAvailability,
       maxSessionsPerDayPerClass,
+      maxSubjectHoursPerDayPerClass,
+      classBlockedSlots,
       slotsByDay,
       deadline
     );
@@ -198,13 +230,20 @@ function attemptOnce(
   unitsInput: SchedulableUnit[],
   teacherAvailability: Map<string, AvailabilityWindow[]>,
   maxSessionsPerDayPerClass: number,
+  maxSubjectHoursPerDayPerClass: number,
+  classBlockedSlots: Map<string, Set<string>>,
   slotsByDay: Map<number, SlotRef[]>,
   deadline: number
 ): GenerationResult {
-  // 1) Construire le domaine (créneaux compatibles) de chaque unité
+  // 1) Construire le domaine (créneaux compatibles) de chaque unité : le prof
+  // doit être disponible ET le créneau ne doit pas tomber sur un jour/demi-
+  // journée de repos du niveau de la classe.
   const units: InternalUnit[] = shuffle(unitsInput).map((u) => {
     const windows = teacherAvailability.get(u.teacherId) ?? [];
-    const domain = slots.filter((slot) => isSlotWithinAvailability(slot, windows));
+    const blocked = classBlockedSlots.get(u.classId);
+    const domain = slots.filter(
+      (slot) => isSlotWithinAvailability(slot, windows) && !blocked?.has(slot.id)
+    );
     return { ...u, domain: shuffle(domain) };
   });
 
@@ -214,6 +253,7 @@ function attemptOnce(
   const teacherBusy = new Set<string>(); // teacherId::day::order
   const classBusy = new Set<string>(); // classId::day::order
   const classDayCount = new Map<string, number>(); // classId::day -> count
+  const classDaySubjectCount = new Map<string, number>(); // classId::day::subjectId -> count
 
   const placed: PlacedSession[] = [];
   const unresolved: SchedulableUnit[] = [];
@@ -229,16 +269,22 @@ function attemptOnce(
       const tKey = slotKey(unit.teacherId, slot.dayOfWeek, slot.order);
       const cKey = slotKey(unit.classId, slot.dayOfWeek, slot.order);
       const dayCountKey = `${unit.classId}::${slot.dayOfWeek}`;
+      const subjectDayKey = `${unit.classId}::${slot.dayOfWeek}::${unit.subjectId}`;
 
       if (teacherBusy.has(tKey)) continue;
       if (classBusy.has(cKey)) continue;
       const currentCount = classDayCount.get(dayCountKey) ?? 0;
       if (currentCount >= maxSessionsPerDayPerClass) continue;
+      const currentSubjectCount = classDaySubjectCount.get(subjectDayKey) ?? 0;
+      // Contrainte dure : une matière ne peut pas dépasser N heures pour une
+      // même classe le même jour (ex: pas plus de 2h de Maths le lundi).
+      if (currentSubjectCount >= maxSubjectHoursPerDayPerClass) continue;
 
       // Placer provisoirement
       teacherBusy.add(tKey);
       classBusy.add(cKey);
       classDayCount.set(dayCountKey, currentCount + 1);
+      classDaySubjectCount.set(subjectDayKey, currentSubjectCount + 1);
       placed.push({
         classId: unit.classId,
         teacherId: unit.teacherId,
@@ -255,6 +301,7 @@ function attemptOnce(
       teacherBusy.delete(tKey);
       classBusy.delete(cKey);
       classDayCount.set(dayCountKey, currentCount);
+      classDaySubjectCount.set(subjectDayKey, currentSubjectCount);
     }
     return false;
   }
@@ -265,7 +312,7 @@ function attemptOnce(
     // Le backtracking complet n'a pas abouti dans le budget imparti : on
     // repart d'un état propre et on place gloutonnement tout ce qui peut
     // encore l'être, en rapportant clairement les séances impossibles à caser.
-    return greedyFallback(units, maxSessionsPerDayPerClass, slotsByDay);
+    return greedyFallback(units, maxSessionsPerDayPerClass, maxSubjectHoursPerDayPerClass, slotsByDay);
   }
 
   const score = scoreSolution(placed, slotsByDay);
@@ -282,11 +329,13 @@ function attemptOnce(
 function greedyFallback(
   units: InternalUnit[],
   maxSessionsPerDayPerClass: number,
+  maxSubjectHoursPerDayPerClass: number,
   slotsByDay: Map<number, SlotRef[]>
 ): GenerationResult {
   const teacherBusy = new Set<string>();
   const classBusy = new Set<string>();
   const classDayCount = new Map<string, number>();
+  const classDaySubjectCount = new Map<string, number>();
   const placed: PlacedSession[] = [];
   const unresolved: SchedulableUnit[] = [];
 
@@ -296,15 +345,19 @@ function greedyFallback(
       const tKey = slotKey(unit.teacherId, slot.dayOfWeek, slot.order);
       const cKey = slotKey(unit.classId, slot.dayOfWeek, slot.order);
       const dayCountKey = `${unit.classId}::${slot.dayOfWeek}`;
+      const subjectDayKey = `${unit.classId}::${slot.dayOfWeek}::${unit.subjectId}`;
       const currentCount = classDayCount.get(dayCountKey) ?? 0;
+      const currentSubjectCount = classDaySubjectCount.get(subjectDayKey) ?? 0;
 
       if (teacherBusy.has(tKey)) continue;
       if (classBusy.has(cKey)) continue;
       if (currentCount >= maxSessionsPerDayPerClass) continue;
+      if (currentSubjectCount >= maxSubjectHoursPerDayPerClass) continue;
 
       teacherBusy.add(tKey);
       classBusy.add(cKey);
       classDayCount.set(dayCountKey, currentCount + 1);
+      classDaySubjectCount.set(subjectDayKey, currentSubjectCount + 1);
       placed.push({
         classId: unit.classId,
         teacherId: unit.teacherId,

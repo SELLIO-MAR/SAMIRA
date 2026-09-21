@@ -1,0 +1,17 @@
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm install
+
+COPY . .
+
+RUN npx prisma generate
+
+EXPOSE 4000
+
+# db push : synchronise le schéma sans avoir besoin de fichiers de migration
+# (idéal pour un démarrage en un clic ; utilisez "prisma migrate" pour un vrai projet en production)
+# le "|| true" sur le seed évite de bloquer le démarrage si les données existent déjà
+CMD ["sh", "-c", "npx prisma db push --skip-generate && (npx tsx src/seed.ts || true) && npm run dev"]

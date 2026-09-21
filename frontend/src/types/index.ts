@@ -25,8 +25,14 @@ export interface SchoolConfigDto {
   id: string;
   name: string;
   maxSessionsPerDay: number;
+  maxSubjectHoursPerDay: number;
   freeHalfDays: { dayOfWeek: number; period: "morning" | "afternoon" }[];
   workDays: WorkDayDto[];
+}
+
+export interface RestDayDto {
+  dayOfWeek: number;
+  period: "full" | "morning" | "afternoon";
 }
 
 export interface SubjectDto {
@@ -47,6 +53,7 @@ export interface LevelDto {
   name: string;
   classes: ClassDto[];
   subjects: SubjectRequirementDto[];
+  restDays: RestDayDto[];
 }
 
 export interface ClassDto {

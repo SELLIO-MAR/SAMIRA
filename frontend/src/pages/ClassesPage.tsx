@@ -1,24 +1,36 @@
 import { useEffect, useState } from "react";
 import Layout from "../components/Layout";
-import { Card, Button, Input, EmptyState } from "../components/ui";
+import { Card, Button, Input, Select, EmptyState } from "../components/ui";
 import { api } from "../api/client";
-import { LevelDto } from "../types";
+import { LevelDto, RestDayDto, SchoolConfigDto, DAY_NAMES } from "../types";
 
 export default function ClassesPage() {
   const [levels, setLevels] = useState<LevelDto[]>([]);
+  const [workDays, setWorkDays] = useState<number[]>([]);
   const [newLevelName, setNewLevelName] = useState("");
   const [newClassNames, setNewClassNames] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
 
   async function refresh() {
-    const { data } = await api.get<LevelDto[]>("/classes/levels");
-    setLevels(data);
+    const [levelsRes, schoolRes] = await Promise.all([
+      api.get<LevelDto[]>("/classes/levels"),
+      api.get<SchoolConfigDto>("/school"),
+    ]);
+    setLevels(levelsRes.data);
+    setWorkDays(schoolRes.data.workDays.map((w) => w.dayOfWeek).sort((a, b) => a - b));
     setLoading(false);
   }
 
   useEffect(() => {
     refresh();
   }, []);
+
+  async function toggleRestDay(level: LevelDto, dayOfWeek: number, period: RestDayDto["period"] | "none") {
+    let restDays = level.restDays.filter((r) => r.dayOfWeek !== dayOfWeek);
+    if (period !== "none") restDays = [...restDays, { dayOfWeek, period }];
+    await api.put(`/classes/levels/${level.id}/rest-days`, { restDays });
+    refresh();
+  }
 
   async function addLevel() {
     if (!newLevelName.trim()) return;
@@ -80,7 +92,37 @@ export default function ClassesPage() {
                 </button>
               }
             >
-              <div className="space-y-3">
+              <div className="space-y-4">
+                {workDays.length > 0 && (
+                  <div className="pb-3 border-b border-line">
+                    <p className="text-xs text-ink-400 mb-2">
+                      Jours de repos de ce niveau (ignorés par le moteur de génération) :
+                    </p>
+                    <div className="flex flex-wrap gap-3">
+                      {workDays.map((d) => {
+                        const current = level.restDays.find((r) => r.dayOfWeek === d);
+                        return (
+                          <div key={d} className="flex items-center gap-1.5">
+                            <span className="text-xs text-ink-600 w-16">{DAY_NAMES[d]}</span>
+                            <Select
+                              value={current?.period ?? "none"}
+                              onChange={(e) =>
+                                toggleRestDay(level, d, e.target.value as RestDayDto["period"] | "none")
+                              }
+                              className="w-36 text-xs"
+                            >
+                              <option value="none">Cours normal</option>
+                              <option value="full">Repos — journée entière</option>
+                              <option value="morning">Repos — matin</option>
+                              <option value="afternoon">Repos — après-midi</option>
+                            </Select>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
                 <div className="flex flex-wrap gap-2">
                   {level.classes.length === 0 && (
                     <p className="text-sm text-ink-400">Aucune classe pour ce niveau.</p>

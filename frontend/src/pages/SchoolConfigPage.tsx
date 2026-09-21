@@ -25,6 +25,7 @@ const DEFAULT_DAYS: DayForm[] = DAY_NAMES.slice(0, 6).map((_, i) => ({
 export default function SchoolConfigPage() {
   const [name, setName] = useState("Mon établissement");
   const [maxSessionsPerDay, setMaxSessionsPerDay] = useState(6);
+  const [maxSubjectHoursPerDay, setMaxSubjectHoursPerDay] = useState(2);
   const [days, setDays] = useState<DayForm[]>(DEFAULT_DAYS);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -34,6 +35,7 @@ export default function SchoolConfigPage() {
     api.get<SchoolConfigDto>("/school").then(({ data }) => {
       setName(data.name);
       setMaxSessionsPerDay(data.maxSessionsPerDay);
+      setMaxSubjectHoursPerDay(data.maxSubjectHoursPerDay ?? 2);
       if (data.workDays.length > 0) {
         const byDay = new Map(data.workDays.map((wd) => [wd.dayOfWeek, wd]));
         setDays(
@@ -82,6 +84,7 @@ export default function SchoolConfigPage() {
       await api.put("/school", {
         name,
         maxSessionsPerDay,
+        maxSubjectHoursPerDay,
         freeHalfDays: [],
         workDays: days
           .filter((d) => d.enabled)
@@ -117,7 +120,7 @@ export default function SchoolConfigPage() {
         {message && <p className="text-sm text-ink-600">{message}</p>}
 
         <Card title="Informations générales">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-3 gap-4">
             <div>
               <label className="text-xs text-ink-400 mb-1 block">Nom de l'établissement</label>
               <Input value={name} onChange={(e) => setName(e.target.value)} />
@@ -131,6 +134,21 @@ export default function SchoolConfigPage() {
                 value={maxSessionsPerDay}
                 onChange={(e) => setMaxSessionsPerDay(Number(e.target.value))}
               />
+            </div>
+            <div>
+              <label className="text-xs text-ink-400 mb-1 block">
+                Max. heures d'une même matière / jour / classe
+              </label>
+              <Input
+                type="number"
+                min={1}
+                max={10}
+                value={maxSubjectHoursPerDay}
+                onChange={(e) => setMaxSubjectHoursPerDay(Number(e.target.value))}
+              />
+              <p className="text-xs text-ink-400 mt-1">
+                Ex : avec 2, une classe ne peut pas avoir plus de 2h de Maths le même jour.
+              </p>
             </div>
           </div>
         </Card>

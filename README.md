@@ -15,12 +15,37 @@ school-scheduler/
 └── frontend/      Interface d'administration (React)
 ```
 
-## 1. Prérequis
+## 🚀 Option la plus simple : Docker (une seule commande)
+
+Si vous avez [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+installé (Windows, Mac ou Linux), vous n'avez rien d'autre à installer —
+pas besoin de Node.js ni de PostgreSQL sur votre machine.
+
+```bash
+cd school-scheduler
+docker compose up
+```
+
+Cette seule commande construit et démarre automatiquement : la base de
+données PostgreSQL, l'API backend (avec création des tables et données
+d'exemple), et le frontend. Patientez 1 à 2 minutes le temps du premier
+démarrage, puis ouvrez **http://localhost:5173**.
+
+Pour arrêter : `Ctrl+C` puis `docker compose down` (ajoutez `-v` pour aussi
+supprimer les données enregistrées et repartir de zéro).
+
+Si vous n'avez pas Docker, suivez l'installation manuelle ci-dessous.
+
+---
+
+## Option manuelle (sans Docker)
+
+### 1. Prérequis
 
 - Node.js 18+ et npm
 - PostgreSQL 14+ (local ou distant)
 
-## 2. Installation du backend
+### 2. Installation du backend
 
 ```bash
 cd backend
@@ -32,7 +57,7 @@ npm run seed                # (optionnel) insère des données d'exemple
 npm run dev                 # démarre l'API sur http://localhost:4000
 ```
 
-## 3. Installation du frontend
+### 3. Installation du frontend
 
 Dans un second terminal :
 
@@ -45,7 +70,7 @@ npm run dev                 # démarre l'interface sur http://localhost:5173
 Le frontend est déjà configuré (`vite.config.ts`) pour rediriger les appels
 `/api/*` vers `http://localhost:4000`.
 
-## 4. Utilisation
+## Utilisation (dans les deux cas, Docker ou manuel)
 
 Suivez les étapes dans la barre latérale, dans l'ordre :
 
@@ -61,7 +86,28 @@ Suivez les étapes dans la barre latérale, dans l'ordre :
 Le tableau de bord (page d'accueil) affiche les statistiques globales de
 l'établissement (effectifs, volumes horaires, répartition par matière/niveau).
 
-## 5. Le moteur de génération
+## Nouveautés : matière limitée/jour, jours de repos, priorité au professeur
+
+Trois règles ont été ajoutées au moteur :
+
+1. **Étape 1** — un nouveau champ « Max. heures d'une même matière / jour / classe »
+   (ex : 2) empêche qu'une classe ait plus de 2h de Maths le même jour.
+2. **Étape 2** — chaque niveau peut avoir des « jours de repos » (journée entière,
+   matin ou après-midi) ; le moteur n'y placera jamais de séance pour les
+   classes de ce niveau.
+3. Le score de qualité du moteur donne maintenant une priorité forte à
+   l'absence d'heures creuses **côté professeur** (et pas seulement côté
+   classe) : un professeur enchaîne ses séances de la journée sans creux.
+
+⚠️ Le schéma de base de données a changé (nouveaux champs). Si vous aviez
+déjà installé le projet :
+
+- **Avec Docker** : rien à faire, `docker compose up` réapplique le schéma
+  automatiquement au démarrage (via `prisma db push`).
+- **Installation manuelle** : relancez `npm run prisma:migrate` dans
+  `backend/` (donnez-lui un nom de migration, ex : "add-rest-days").
+
+## Le moteur de génération
 
 Le moteur (`backend/src/services/scheduler.service.ts`) modélise le problème
 comme un CSP (Constraint Satisfaction Problem) :
@@ -78,7 +124,7 @@ premier), un **backtracking** avec plusieurs tentatives aléatoires, et un
 qui n'ont pas pu être placées sont listées clairement pour permettre un
 ajustement manuel (élargir une disponibilité, revoir un volume horaire...).
 
-## 6. Notes de mise en production
+## Notes de mise en production
 
 - Ajoutez une authentification (ex: JWT) avant toute mise en production —
   cette base ne protège pas encore les routes de l'API.

@@ -48,6 +48,33 @@ classesRouter.delete("/levels/:id", async (req, res, next) => {
   }
 });
 
+const restDaysSchema = z.object({
+  restDays: z.array(
+    z.object({
+      dayOfWeek: z.number().int().min(0).max(6),
+      period: z.enum(["full", "morning", "afternoon"]),
+    })
+  ),
+});
+
+/**
+ * Met à jour les jours (ou demi-journées) de repos d'un niveau, ex: le
+ * mercredi après-midi les 1AC n'ont pas cours. Pris en compte par le moteur
+ * de génération, qui n'y placera aucune séance pour ce niveau.
+ */
+classesRouter.put("/levels/:id/rest-days", async (req, res, next) => {
+  try {
+    const { restDays } = restDaysSchema.parse(req.body);
+    const level = await prisma.level.update({
+      where: { id: req.params.id },
+      data: { restDays },
+    });
+    res.json(level);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // --- Classes -------------------------------------------------------------
 
 classesRouter.get("/", async (_req, res, next) => {

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { prisma } from "../db";
 import { generateTimetable } from "../services/scheduler.service";
-import { SlotRef, AvailabilityWindow, SchedulableUnit } from "../types";
+import { SlotRef, AvailabilityWindow, SchedulableUnit, RestDay, AFTERNOON_THRESHOLD } from "../types";
 
 export const timetableRouter = Router();
 
@@ -42,6 +42,29 @@ timetableRouter.post("/generate", async (_req, res, next) => {
         teacherAssignments: { include: { teacher: { include: { subject: true } } } },
       },
     });
+
+    // Pour chaque classe, calculer les créneaux interdits à partir des jours
+    // (ou demi-journées) de repos déclarés sur son niveau (Étape 2 / Étape 1).
+    const classBlockedSlots = new Map<string, Set<string>>();
+    for (const cls of classes) {
+      const restDays = (cls.level.restDays as unknown as RestDay[]) ?? [];
+      if (restDays.length === 0) continue;
+      const blocked = new Set<string>();
+      for (const rest of restDays) {
+        for (const slot of slots) {
+          if (slot.dayOfWeek !== rest.dayOfWeek) continue;
+          const isMorning = slot.startTime < AFTERNOON_THRESHOLD;
+          if (
+            rest.period === "full" ||
+            (rest.period === "morning" && isMorning) ||
+            (rest.period === "afternoon" && !isMorning)
+          ) {
+            blocked.add(slot.id);
+          }
+        }
+      }
+      classBlockedSlots.set(cls.id, blocked);
+    }
 
     const teachers = await prisma.teacher.findMany({
       where: { schoolId: school.id },
@@ -105,6 +128,8 @@ timetableRouter.post("/generate", async (_req, res, next) => {
       units,
       teacherAvailability: availabilityMap,
       maxSessionsPerDayPerClass: school.maxSessionsPerDay,
+      maxSubjectHoursPerDayPerClass: school.maxSubjectHoursPerDay,
+      classBlockedSlots,
     });
 
     const run = await prisma.timetableRun.create({
