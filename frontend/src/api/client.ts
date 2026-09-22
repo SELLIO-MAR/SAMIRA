@@ -1,7 +1,8 @@
 import axios from "axios";
 
-export const api = axios.create({ baseURL: "/api" });
-
+export const api = axios.create({
+  baseURL: "https://graceful-adventure-production.up.railway.app/api"
+});
 api.interceptors.response.use(
   (res) => res,
   (err) => {
