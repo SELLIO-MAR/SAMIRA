@@ -11,7 +11,9 @@ RUN npx prisma generate
 
 EXPOSE 4000
 
-# db push : synchronise le schéma sans avoir besoin de fichiers de migration
-# (idéal pour un démarrage en un clic ; utilisez "prisma migrate" pour un vrai projet en production)
+# db push : synchronise le schéma sans avoir besoin de fichiers de migration.
+# Le dossier prisma/ est monté en volume (docker-compose.yml) et peut donc
+# changer sans reconstruire l'image : on régénère le client à CHAQUE
+# démarrage pour être certain qu'il corresponde toujours au schéma actuel.
 # le "|| true" sur le seed évite de bloquer le démarrage si les données existent déjà
-CMD ["sh", "-c", "npx prisma db push --skip-generate && (npx tsx src/seed.ts || true) && npm run dev"]
+CMD ["sh", "-c", "npx prisma generate && npx prisma db push && (npx tsx src/seed.ts || true) && npm run dev"]

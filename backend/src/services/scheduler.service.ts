@@ -30,12 +30,17 @@ import {
  *  - du backtracking avec forward-checking (retour arrière) ;
  *  - plusieurs tentatives ("restarts") avec un ordre aléatoire différent,
  *    en conservant la meilleure solution trouvée (le plus de séances
- *    placées, puis le meilleur score de qualité).
+ *    placées, puis le meilleur score de qualité) ;
+ *  - une phase finale d'amélioration locale (hill-climbing) : échanges et
+ *    déplacements de séances qui ne sont conservés que s'ils réduisent
+ *    encore les heures creuses, sans jamais casser une contrainte dure.
  */
 
 const MAX_RESTARTS = 12;
 const MAX_BACKTRACK_STEPS = 60_000; // garde-fou pour éviter un temps infini
 const TIME_BUDGET_MS = 8_000;
+const LOCAL_SEARCH_TIME_MS = 4_000;
+const LOCAL_SEARCH_MAX_ITERATIONS = 4_000;
 
 interface InternalUnit extends SchedulableUnit {
   domain: SlotRef[]; // recalculé à chaque tentative
@@ -222,6 +227,30 @@ export function generateTimetable(params: {
     if (bestResult.unresolved.length === 0) break; // solution complète trouvée
   }
 
+  // --- Phase d'amélioration locale (hill-climbing) ------------------------
+  // Une fois qu'on a la meilleure solution issue du backtracking, on essaie
+  // d'échanger ou de déplacer des séances une par une pour réduire encore
+  // les heures creuses (surtout côté professeur), tant que ça n'enfreint
+  // aucune contrainte dure. On ne garde un changement que s'il améliore
+  // strictement le score.
+  if (bestResult && bestResult.placed.length > 1) {
+    const improvedPlaced = localSearchImprove({
+      placed: bestResult.placed,
+      slots,
+      teacherAvailability,
+      classBlockedSlots,
+      maxSessionsPerDayPerClass,
+      maxSubjectHoursPerDayPerClass,
+      slotsByDay,
+      deadline: Date.now() + LOCAL_SEARCH_TIME_MS,
+    });
+    bestResult = {
+      ...bestResult,
+      placed: improvedPlaced,
+      score: scoreSolution(improvedPlaced, slotsByDay),
+    };
+  }
+
   return bestResult!;
 }
 
@@ -379,4 +408,136 @@ function greedyFallback(
     placed,
     unresolved,
   };
+}
+
+/**
+ * Amélioration locale (hill-climbing) : part d'une solution déjà valide et
+ * essaie, itération par itération, deux types de mouvement :
+ *  - RELOCATION : déplacer une séance vers un autre créneau libre.
+ *  - ÉCHANGE    : permuter les créneaux de deux séances.
+ * Un mouvement n'est conservé que s'il respecte toutes les contraintes dures
+ * ET améliore strictement le score global (moins d'heures creuses, surtout
+ * côté professeur). Toujours borné par un budget de temps.
+ */
+function localSearchImprove(params: {
+  placed: PlacedSession[];
+  slots: SlotRef[];
+  teacherAvailability: Map<string, AvailabilityWindow[]>;
+  classBlockedSlots: Map<string, Set<string>>;
+  maxSessionsPerDayPerClass: number;
+  maxSubjectHoursPerDayPerClass: number;
+  slotsByDay: Map<number, SlotRef[]>;
+  deadline: number;
+}): PlacedSession[] {
+  const {
+    slots,
+    teacherAvailability,
+    classBlockedSlots,
+    maxSessionsPerDayPerClass,
+    maxSubjectHoursPerDayPerClass,
+    slotsByDay,
+    deadline,
+  } = params;
+
+  const state = params.placed.map((p) => ({ ...p }));
+  const slotById = new Map(slots.map((s) => [s.id, s]));
+  let currentScore = scoreSolution(state, slotsByDay);
+
+  /** Vérifie qu'affecter `slot` à une séance (hors indices exclus) ne viole aucune contrainte dure. */
+  function isPlacementValid(
+    slot: SlotRef,
+    teacherId: string,
+    classId: string,
+    subjectId: string,
+    excludeIndices: Set<number>
+  ): boolean {
+    const windows = teacherAvailability.get(teacherId) ?? [];
+    if (!isSlotWithinAvailability(slot, windows)) return false;
+    if (classBlockedSlots.get(classId)?.has(slot.id)) return false;
+
+    let sessionsThisClassDay = 0;
+    let sessionsThisSubjectDay = 0;
+    for (let k = 0; k < state.length; k++) {
+      if (excludeIndices.has(k)) continue;
+      const other = state[k];
+      if (other.dayOfWeek === slot.dayOfWeek && other.order === slot.order) {
+        if (other.teacherId === teacherId) return false; // prof déjà pris
+        if (other.classId === classId) return false; // classe déjà prise
+      }
+      if (other.classId === classId && other.dayOfWeek === slot.dayOfWeek) {
+        sessionsThisClassDay++;
+        if (other.subjectId === subjectId) sessionsThisSubjectDay++;
+      }
+    }
+    if (sessionsThisClassDay >= maxSessionsPerDayPerClass) return false;
+    if (sessionsThisSubjectDay >= maxSubjectHoursPerDayPerClass) return false;
+    return true;
+  }
+
+  let iterations = 0;
+  while (iterations < LOCAL_SEARCH_MAX_ITERATIONS) {
+    if (++iterations % 200 === 0 && Date.now() > deadline) break;
+    if (state.length === 0) break;
+
+    const i = Math.floor(Math.random() * state.length);
+    const sessionA = state[i];
+
+    if (Math.random() < 0.5) {
+      // --- Mouvement de RELOCATION : essayer un créneau au hasard --------
+      const candidateSlot = slots[Math.floor(Math.random() * slots.length)];
+      if (candidateSlot.id === sessionA.timeSlotId) continue;
+
+      const excluded = new Set([i]);
+      if (
+        !isPlacementValid(candidateSlot, sessionA.teacherId, sessionA.classId, sessionA.subjectId, excluded)
+      ) {
+        continue;
+      }
+
+      const previous = { ...sessionA };
+      sessionA.timeSlotId = candidateSlot.id;
+      sessionA.dayOfWeek = candidateSlot.dayOfWeek;
+      sessionA.order = candidateSlot.order;
+
+      const newScore = scoreSolution(state, slotsByDay);
+      if (newScore > currentScore) {
+        currentScore = newScore; // amélioration conservée
+      } else {
+        state[i] = previous; // pas d'amélioration : on annule
+      }
+    } else {
+      // --- Mouvement d'ÉCHANGE : permuter deux séances --------------------
+      const j = Math.floor(Math.random() * state.length);
+      if (i === j) continue;
+      const sessionB = state[j];
+      if (sessionA.timeSlotId === sessionB.timeSlotId) continue;
+
+      const slotA = slotById.get(sessionA.timeSlotId)!;
+      const slotB = slotById.get(sessionB.timeSlotId)!;
+      const excluded = new Set([i, j]);
+
+      const aIntoB = isPlacementValid(slotB, sessionA.teacherId, sessionA.classId, sessionA.subjectId, excluded);
+      const bIntoA = isPlacementValid(slotA, sessionB.teacherId, sessionB.classId, sessionB.subjectId, excluded);
+      if (!aIntoB || !bIntoA) continue;
+
+      const prevA = { ...sessionA };
+      const prevB = { ...sessionB };
+      sessionA.timeSlotId = slotB.id;
+      sessionA.dayOfWeek = slotB.dayOfWeek;
+      sessionA.order = slotB.order;
+      sessionB.timeSlotId = slotA.id;
+      sessionB.dayOfWeek = slotA.dayOfWeek;
+      sessionB.order = slotA.order;
+
+      const newScore = scoreSolution(state, slotsByDay);
+      if (newScore > currentScore) {
+        currentScore = newScore;
+      } else {
+        state[i] = prevA;
+        state[j] = prevB;
+      }
+    }
+  }
+
+  return state;
 }

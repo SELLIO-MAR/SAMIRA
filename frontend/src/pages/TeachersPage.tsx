@@ -17,6 +17,7 @@ export default function TeachersPage() {
   const [subjects, setSubjects] = useState<SubjectDto[]>([]);
   const [classes, setClasses] = useState<ClassDto[]>([]);
   const [form, setForm] = useState(emptyForm);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
 
@@ -66,10 +67,48 @@ export default function TeachersPage() {
     setForm((prev) => ({ ...prev, availabilities: prev.availabilities.filter((_, i) => i !== index) }));
   }
 
+  function startEdit(t: TeacherDto) {
+    setEditingId(t.id);
+    setForm({
+      fullName: t.fullName,
+      subjectId: t.subjectId,
+      weeklyHours: t.weeklyHours,
+      classIds: t.assignments.map((a) => a.class.id),
+      availabilities: t.availabilities.map((a) => ({
+        dayOfWeek: a.dayOfWeek,
+        startTime: a.startTime,
+        endTime: a.endTime,
+        isAvailable: a.isAvailable,
+      })),
+    });
+    setShowForm(true);
+  }
+
+  function openNewForm() {
+    if (showForm && !editingId) {
+      setShowForm(false);
+      return;
+    }
+    setEditingId(null);
+    setForm(emptyForm);
+    setShowForm(true);
+  }
+
+  function cancelForm() {
+    setEditingId(null);
+    setForm(emptyForm);
+    setShowForm(false);
+  }
+
   async function submit() {
     if (!form.fullName.trim() || !form.subjectId) return;
-    await api.post("/teachers", form);
+    if (editingId) {
+      await api.put(`/teachers/${editingId}`, form);
+    } else {
+      await api.post("/teachers", form);
+    }
     setForm(emptyForm);
+    setEditingId(null);
     setShowForm(false);
     refresh();
   }
@@ -86,11 +125,11 @@ export default function TeachersPage() {
     <Layout
       title="Étape 4 · Professeurs"
       description="Renseignez chaque professeur : matière enseignée, classes attribuées, disponibilités et volume horaire."
-      actions={<Button onClick={() => setShowForm((v) => !v)}>{showForm ? "Fermer" : "+ Nouveau professeur"}</Button>}
+      actions={<Button onClick={openNewForm}>{showForm && !editingId ? "Fermer" : "+ Nouveau professeur"}</Button>}
     >
       <div className="space-y-6 max-w-5xl">
         {showForm && (
-          <Card title="Nouveau professeur">
+          <Card title={editingId ? `Modifier — ${form.fullName || "professeur"}` : "Nouveau professeur"}>
             <div className="space-y-4">
               <div className="grid grid-cols-3 gap-4">
                 <div>
@@ -199,8 +238,15 @@ export default function TeachersPage() {
                 </div>
               </div>
 
-              <div className="flex justify-end">
-                <Button onClick={submit}>Enregistrer le professeur</Button>
+              <div className="flex justify-end gap-3">
+                {editingId && (
+                  <Button variant="secondary" onClick={cancelForm}>
+                    Annuler
+                  </Button>
+                )}
+                <Button onClick={submit}>
+                  {editingId ? "Enregistrer les modifications" : "Enregistrer le professeur"}
+                </Button>
               </div>
             </div>
           </Card>
@@ -230,9 +276,14 @@ export default function TeachersPage() {
                     </td>
                     <td className="py-2">{t.weeklyHours}h</td>
                     <td className="py-2">
-                      <button onClick={() => removeTeacher(t.id)} className="text-red-500 text-xs hover:underline">
-                        Supprimer
-                      </button>
+                      <div className="flex items-center gap-3">
+                        <button onClick={() => startEdit(t)} className="text-gold-600 text-xs hover:underline">
+                          Modifier
+                        </button>
+                        <button onClick={() => removeTeacher(t.id)} className="text-red-500 text-xs hover:underline">
+                          Supprimer
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
